@@ -74,7 +74,7 @@ router.post('/generate-auth-url', apiKeyAuth, async (req, res) => {
     const { proxy } = req.body || {}
 
     const pkce = generateOpenAIPKCE()
-    const state = crypto.randomBytes(32).toString('hex')
+    const state = crypto.randomBytes(16).toString('hex')
     const sessionId = crypto.randomUUID()
 
     const createdAt = new Date()
