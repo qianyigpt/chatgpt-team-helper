@@ -141,8 +141,6 @@ const openaiOAuthInput = ref('')
 const openaiOAuthError = ref('')
 const generatingOpenaiAuthUrl = ref(false)
 const exchangingOpenaiCode = ref(false)
-const cachedApiKey = ref<string>('')
-const cachedApiKeyConfigured = ref<boolean | null>(null)
 let openaiOAuthFlowNonce = 0
 
 const resolveRequestError = (err: any, fallback: string) => {
@@ -154,21 +152,6 @@ const resolveRequestError = (err: any, fallback: string) => {
   )
 }
 
-const ensureSystemApiKey = async (): Promise<string | null> => {
-  if (cachedApiKey.value) return cachedApiKey.value
-
-  try {
-    const result = await userService.getApiKey()
-    const apiKey = typeof result?.apiKey === 'string' ? result.apiKey.trim() : ''
-    cachedApiKeyConfigured.value = typeof result?.configured === 'boolean' ? result.configured : null
-    if (!apiKey) return null
-    cachedApiKey.value = apiKey
-    return apiKey
-  } catch (err) {
-    cachedApiKeyConfigured.value = null
-    return null
-  }
-}
 
 const resetOpenaiOAuthFlow = () => {
   openaiOAuthFlowNonce += 1
