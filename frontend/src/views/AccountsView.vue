@@ -349,7 +349,7 @@ const handleExchangeOpenaiCode = async () => {
       exchangingOpenaiCode.value = false
     }
   }
-}
+
 
     // OAuth 交换接口不会返回 Team 订阅到期时间；这里用 access token 额外拉一次账号信息，
     // 尝试自动填充过期时间（entitlement.expires_at）。
