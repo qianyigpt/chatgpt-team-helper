@@ -90,19 +90,7 @@ router.post('/generate-auth-url', apiKeyAuth, async (req, res) => {
       expiresAt: expiresAt.toISOString()
     })
 
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: OPENAI_CONFIG.CLIENT_ID,
-      redirect_uri: OPENAI_CONFIG.REDIRECT_URI,
-      scope: OPENAI_CONFIG.SCOPE,
-      code_challenge: pkce.codeChallenge,
-      code_challenge_method: 'S256',
-      state,
-      id_token_add_organizations: 'true',
-      codex_cli_simplified_flow: 'true'
-    })
-
-    const authUrl = `${OPENAI_CONFIG.BASE_URL}/oauth/authorize?${params.toString()}`
+    const authUrl = `${OPENAI_CONFIG.BASE_URL}/oauth/authorize?response_type=code&client_id=${OPENAI_CONFIG.CLIENT_ID}&redirect_uri=${OPENAI_CONFIG.REDIRECT_URI}&scope=${OPENAI_CONFIG.SCOPE}&code_challenge=${pkce.codeChallenge}&code_challenge_method=S256&state=${state}&id_token_add_organizations=true&codex_cli_simplified_flow=true`
 
     console.log(`🔗 Generated OpenAI OAuth authorization URL for session ${sessionId}`)
 
