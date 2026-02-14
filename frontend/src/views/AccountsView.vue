@@ -216,28 +216,58 @@ const extractOAuthCode = (value: string): string => {
   return raw
 }
 
+let currentPkceVerifier = '';
+
+const generateRandomString = (length: number) => {
+  const charset = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+  let result = '';
+  const values = new Uint32Array(length);
+  crypto.getRandomValues(values);
+  for (let i = 0; i < length; i++) {
+    result += charset[values[i] % charset.length];
+  }
+  return result;
+};
+
+const generateCodeChallenge = async (verifier: string) => {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(verifier);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  return btoa(String.fromCharCode(...new Uint8Array(digest)))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+};
+
 const generateOpenaiAuthUrl = async () => {
   const currentNonce = openaiOAuthFlowNonce
   openaiOAuthError.value = ''
   openaiOAuthResult.value = null
   openaiOAuthInput.value = ''
 
-  const apiKey = await ensureSystemApiKey()
-  if (!apiKey) {
-    const message =
-      cachedApiKeyConfigured.value === false
-        ? '系统未配置 API Key，请先到「系统设置」配置后再试'
-        : '获取 API Key 失败（需要系统设置权限）'
-    openaiOAuthError.value = message
-    showErrorToast(message)
-    return
-  }
-
   try {
     generatingOpenaiAuthUrl.value = true
-    const session = await openaiOAuthService.generateAuthUrl(apiKey)
+    
+    // 1. 生成安全校验码 (PKCE)
+    const verifier = generateRandomString(64)
+    currentPkceVerifier = verifier // 保存下来，兑换 Token 时需要用
+    const challenge = await generateCodeChallenge(verifier)
+    const state = generateRandomString(16).substring(0, 16)
+
+    // 2. 拼装官方 App 授权链接
+    const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+    const REDIRECT_URI = "http://localhost:1455/auth/callback"
+    const SCOPE = "openid profile email offline_access"
+    
+    const authUrl = `https://auth.openai.com/oauth/authorize?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(SCOPE)}&code_challenge=${challenge}&code_challenge_method=S256&state=${state}&id_token_add_organizations=true&codex_cli_simplified_flow=true`
+
     if (currentNonce !== openaiOAuthFlowNonce) return
-    openaiOAuthSession.value = session
+    
+    // 模拟原有 session 结构，保持界面逻辑不报错
+    openaiOAuthSession.value = {
+      authUrl: authUrl,
+      sessionId: state 
+    }
     showOpenaiOAuthPanel.value = true
   } catch (err: any) {
     if (currentNonce !== openaiOAuthFlowNonce) return
@@ -269,37 +299,52 @@ const handleOpenAuthUrl = () => {
 
 const handleExchangeOpenaiCode = async () => {
   const currentNonce = openaiOAuthFlowNonce
-  const sessionId = String(openaiOAuthSession.value?.sessionId || '').trim()
-  if (!sessionId) {
+  
+  if (!openaiOAuthSession.value?.authUrl) {
     showErrorToast('请先点击“获取”生成授权链接')
     return
   }
 
+  // 复用原有的 extractOAuthCode 函数提取 code，它能完美处理 localhost 链接
   const code = extractOAuthCode(openaiOAuthInput.value)
   if (!code) {
     showErrorToast('请粘贴回调 URL 或授权码（code）')
     return
   }
 
-  const apiKey = await ensureSystemApiKey()
-  if (!apiKey) {
-    const message = '获取 API Key 失败（需要系统设置权限）'
-    openaiOAuthError.value = message
-    showErrorToast(message)
-    return
-  }
-
   try {
     exchangingOpenaiCode.value = true
     openaiOAuthError.value = ''
-    const result = await openaiOAuthService.exchangeCode(apiKey, { code, sessionId })
-    if (currentNonce !== openaiOAuthFlowNonce) return
-    openaiOAuthResult.value = result
 
-    const accessToken = String(result?.tokens?.accessToken || '').trim()
-    const refreshToken = String(result?.tokens?.refreshToken || '').trim()
-    const accountId = String(result?.accountInfo?.accountId || '').trim()
-    const oauthEmail = String(result?.accountInfo?.email || '').trim()
+    const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
+    const REDIRECT_URI = "http://localhost:1455/auth/callback"
+
+    // 3. 向 OpenAI 兑换 Refresh Token
+    const response = await fetch("https://auth.openai.com/oauth/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded"
+      },
+      body: new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: CLIENT_ID,
+        code: code,
+        redirect_uri: REDIRECT_URI,
+        code_verifier: currentPkceVerifier
+      })
+    })
+
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`获取失败: ${response.status} ${errorText}`)
+    }
+
+    const data = await response.json()
+    if (currentNonce !== openaiOAuthFlowNonce) return
+
+    // 构造兼容原有逻辑的返回值
+    const accessToken = String(data.access_token || '').trim()
+    const refreshToken = String(data.refresh_token || '').trim()
 
     if (accessToken) {
       formData.value.token = accessToken
@@ -307,23 +352,21 @@ const handleExchangeOpenaiCode = async () => {
     if (refreshToken) {
       formData.value.refreshToken = refreshToken
     } else {
-      showWarningToast('未返回 refresh token（可能未授予 offline_access），请确认授权 scope')
+      showWarningToast('未返回 refresh token，请确认授权 scope')
     }
-    if (accountId) {
-      const existingAccountId = String(formData.value.chatgptAccountId || '').trim()
-      if (!existingAccountId) {
-        formData.value.chatgptAccountId = accountId
-      } else if (existingAccountId !== accountId) {
-        showWarningToast(`授权返回的 ChatGPT ID 为 ${accountId}，与表单不一致，请确认是否填错`)
-      }
+    
+    // 注：由于新的接口不返回详细的 accountId 和 email，已移除相关校验以防报错，保留核心 token 填充功能。
+
+  } catch (err: any) {
+    if (currentNonce !== openaiOAuthFlowNonce) return
+    openaiOAuthError.value = err.message || '兑换 Token 失败'
+    showErrorToast(openaiOAuthError.value)
+  } finally {
+    if (currentNonce === openaiOAuthFlowNonce) {
+      exchangingOpenaiCode.value = false
     }
-    if (oauthEmail) {
-      if (!String(formData.value.email || '').trim()) {
-        formData.value.email = oauthEmail
-      } else if (String(formData.value.email || '').trim().toLowerCase() !== oauthEmail.toLowerCase()) {
-        showWarningToast(`授权账号邮箱为 ${oauthEmail}，与表单邮箱不一致，请确认是否填错`)
-      }
-    }
+  }
+}
 
     // OAuth 交换接口不会返回 Team 订阅到期时间；这里用 access token 额外拉一次账号信息，
     // 尝试自动填充过期时间（entitlement.expires_at）。
